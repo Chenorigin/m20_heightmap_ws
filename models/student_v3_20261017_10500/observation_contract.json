@@ -1,0 +1,73 @@
+{
+  "version": "m20_student_v1",
+  "student_observation_dim": 789,
+  "teacher_observation_dim": 244,
+  "action_dim": 16,
+  "channels": [
+    "proprio",
+    "height",
+    "validity",
+    "confidence",
+    "past_proprio"
+  ],
+  "slices": {
+    "proprio": [
+      0,
+      57
+    ],
+    "height": [
+      57,
+      244
+    ],
+    "validity": [
+      244,
+      431
+    ],
+    "confidence": [
+      431,
+      618
+    ],
+    "past_proprio": [
+      618,
+      789
+    ]
+  },
+  "grid": {
+    "rows_y": 11,
+    "columns_x": 17,
+    "resolution_m": 0.1,
+    "x_range_m": [
+      -0.8,
+      0.8
+    ],
+    "y_range_m": [
+      -0.5,
+      0.5
+    ],
+    "order": "y rows, x columns, ascending",
+    "alignment": "gravity aligned, robot yaw"
+  },
+  "height": {
+    "formula": "clip(base_z - terrain_z - offset, min, max)",
+    "offset_m": 0.5,
+    "clip": [
+      -1.0,
+      1.0
+    ]
+  },
+  "unknown": {
+    "height": 0.0,
+    "validity": 0.0,
+    "confidence": 0.0
+  },
+  "confidence": "m * exp(-cell_age/tau) / (1 + effective_variance/ref_std**2)",
+  "confidence_is_calibrated_probability": false,
+  "normalization": "teacher proprio scales retained; no running observation normalization",
+  "actions": "12 leg position residuals, then 4 wheel velocity commands; teacher scaling retained",
+  "history_steps": 4,
+  "policy_dt_s": 0.02,
+  "previous_action": "previous issued action, before actuator delay",
+  "effective_variance": "height + correlated height + relative pose + roll/pitch + cell-age growth",
+  "map_state": "rolling gravity/yaw grid; observed cells retain individual capture timestamps",
+  "history": "past noisy proprio only; oldest to newest; zero padded on reset; current proprio first"
+}

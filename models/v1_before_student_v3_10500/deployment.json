@@ -1,0 +1,238 @@
+{
+  "profile": "v1",
+  "checkpoint_path": "/home/ubuntu/\u684c\u9762/student_v1.pt",
+  "checkpoint_sha256": "50678b2b4738f2b746e8386ec85eef8cfb844203a865f1a47c2921ce8c602ecd",
+  "policy_sha256": "a4819a45890b2f506b1cf9a337bced92c7b505817e3ab9dedb9b31bd0d7614c4",
+  "contract_sha256": "f27f83aa73bebdb86271a5811930ae3d1a455f31d4b8a9510e0c68d953f4ed72",
+  "source_state_key": "student_state_dict",
+  "input_dim": 789,
+  "history_steps": 4,
+  "action_dim": 16,
+  "training_provenance": {
+    "version": "v1",
+    "task": "Rough-Deeprobotics-M20-Student-v1",
+    "num_envs": 4096,
+    "seed": 42,
+    "teacher_checkpoint": "/home/ubuntu/cyq_shixi_projects/rl_training/logs/rsl_rl/deeprobotics_m20_quiet_landing_v1/2026-10-10_00-48-58_quiet_landing_v1/model_257100.pt",
+    "teacher_sha256": "368fa6287d3fc5e999b4ad596ad9f84be23f25d72bbd861236ec535a66b51c1c",
+    "init_student_checkpoint": null,
+    "init_student_sha256": null,
+    "resume_checkpoint": null,
+    "perception": {
+      "level": 1.0,
+      "clean_probability": 0.15,
+      "stress_probability": 0.15,
+      "stress_multiplier": 2.0,
+      "lidar_horizontal_fov_deg": 135.0,
+      "front_sensor_offset_m": [
+        0.1,
+        0.0,
+        0.15
+      ],
+      "rear_sensor_offset_m": [
+        -0.1,
+        0.0,
+        0.15
+      ],
+      "lidar_min_range_m": 0.05,
+      "lidar_max_range_m": 5.0,
+      "vertical_fov_min_deg": -90.0,
+      "vertical_fov_max_deg": 90.0,
+      "terrain_visibility": true,
+      "visibility_samples": 16,
+      "visibility_tolerance_m": 0.015,
+      "map_update_period_s": 0.1,
+      "update_jitter_s": 0.02,
+      "max_delay_s": 0.06,
+      "max_map_age_s": 0.3,
+      "packet_dropout": 0.05,
+      "burst_probability": 0.02,
+      "burst_duration_s": 0.3,
+      "point_dropout": 0.03,
+      "occlusion_probability": 0.3,
+      "occlusion_width_m": 0.4,
+      "occlusion_height_m": 0.3,
+      "occlusion_hold_s": 0.5,
+      "height_noise_std": 0.02,
+      "height_bias_std": 0.015,
+      "correlated_height_std": 0.01,
+      "map_artifact_probability": 0.03,
+      "map_artifact_height_std": 0.05,
+      "xy_bias_std": 0.015,
+      "yaw_bias_std": 0.01,
+      "pose_drift_xy_std": 0.015,
+      "pose_drift_yaw_std": 0.01,
+      "drift_time_constant_s": 2.0,
+      "roll_pitch_std": 0.01,
+      "gyro_std_rad_s": 0.015,
+      "gyro_bias_std_rad_s": 0.005,
+      "joint_position_std_rad": 0.002,
+      "joint_velocity_std_rad_s": 0.05,
+      "action_delay_steps": 1,
+      "variance_growth_per_s": 0.001,
+      "confidence_reference_std": 0.05,
+      "confidence_age_tau_s": 0.5,
+      "confidence_log_std": 0.2,
+      "confidence_overestimate_probability": 0.02,
+      "confidence_overestimate_factor": 0.25
+    },
+    "training_config": {
+      "seed": 42,
+      "num_steps_per_env": 32,
+      "max_iterations": 10000,
+      "save_interval": 200,
+      "experiment_name": "deeprobotics_m20_student_v1",
+      "logger": "tensorboard",
+      "check_for_nan": true,
+      "clip_actions": 100.0,
+      "history_steps": 4,
+      "student": {
+        "class_name": "rsl_rl.models.MLPModel",
+        "hidden_dims": [
+          512,
+          256,
+          128
+        ],
+        "activation": "elu",
+        "obs_normalization": false,
+        "distribution_cfg": {
+          "class_name": "GaussianDistribution",
+          "init_std": 1.0,
+          "std_type": "log"
+        }
+      },
+      "teacher": {
+        "class_name": "rsl_rl.models.MLPModel",
+        "hidden_dims": [
+          512,
+          256,
+          128
+        ],
+        "activation": "elu",
+        "obs_normalization": false,
+        "distribution_cfg": {
+          "class_name": "GaussianDistribution",
+          "init_std": 1.0,
+          "std_type": "log"
+        }
+      },
+      "obs_groups": {
+        "student": [
+          "policy"
+        ],
+        "teacher": [
+          "teacher"
+        ]
+      },
+      "algorithm": {
+        "class_name": "m20_student_v1.distillation.StudentV1Distillation",
+        "learning_rate": 5e-05,
+        "num_learning_epochs": 2,
+        "max_grad_norm": 1.0,
+        "batch_size": 1024,
+        "replay_rollouts": 8,
+        "hard_replay_rollouts": 2,
+        "save_replay": false,
+        "teacher_ratio": 0.5,
+        "teacher_ratio_end": 0.0,
+        "teacher_warmup_updates": 1000,
+        "teacher_decay_updates": 7000,
+        "student_failure_gate": 0.2,
+        "gate_min_episodes": 32,
+        "leg_loss_weight": 1.0,
+        "wheel_loss_weight": 1.0,
+        "landing_loss_weight": 2.0,
+        "recovery_loss_weight": 2.0,
+        "stratified_fraction": 0.5,
+        "hard_fraction": 0.25,
+        "noise_level_start": 0.5,
+        "noise_level_end": 1.0,
+        "noise_ramp_updates": 4000,
+        "rnd_cfg": null,
+        "symmetry_cfg": null
+      }
+    },
+    "contract": {
+      "version": "m20_student_v1",
+      "student_observation_dim": 789,
+      "teacher_observation_dim": 244,
+      "action_dim": 16,
+      "channels": [
+        "proprio",
+        "height",
+        "validity",
+        "confidence",
+        "past_proprio"
+      ],
+      "slices": {
+        "proprio": [
+          0,
+          57
+        ],
+        "height": [
+          57,
+          244
+        ],
+        "validity": [
+          244,
+          431
+        ],
+        "confidence": [
+          431,
+          618
+        ],
+        "past_proprio": [
+          618,
+          789
+        ]
+      },
+      "grid": {
+        "rows_y": 11,
+        "columns_x": 17,
+        "resolution_m": 0.1,
+        "x_range_m": [
+          -0.8,
+          0.8
+        ],
+        "y_range_m": [
+          -0.5,
+          0.5
+        ],
+        "order": "y rows, x columns, ascending",
+        "alignment": "gravity aligned, robot yaw"
+      },
+      "height": {
+        "formula": "clip(base_z - terrain_z - offset, min, max)",
+        "offset_m": 0.5,
+        "clip": [
+          -1.0,
+          1.0
+        ]
+      },
+      "unknown": {
+        "height": 0.0,
+        "validity": 0.0,
+        "confidence": 0.0
+      },
+      "confidence": "m * exp(-cell_age/tau) / (1 + effective_variance/ref_std**2)",
+      "confidence_is_calibrated_probability": false,
+      "normalization": "teacher proprio scales retained; no running observation normalization",
+      "actions": "12 leg position residuals, then 4 wheel velocity commands; teacher scaling retained",
+      "history_steps": 4,
+      "policy_dt_s": 0.02,
+      "previous_action": "previous issued action, before actuator delay",
+      "effective_variance": "height + correlated height + relative pose + roll/pitch + cell-age growth",
+      "map_state": "rolling gravity/yaw grid; observed cells retain individual capture timestamps",
+      "history": "past noisy proprio only; oldest to newest; zero padded on reset; current proprio first"
+    },
+    "rsl_rl_version": "5.0.1",
+    "sensor_parameters_calibrated_on_hardware": false,
+    "critic": "sensor placeholder only; no value network or reward optimization in distillation"
+  },
+  "export_check": {
+    "samples": 128,
+    "max_abs_error": 0.0,
+    "device": "cpu",
+    "optimizer_teacher_replay_exported": false
+  }
+}

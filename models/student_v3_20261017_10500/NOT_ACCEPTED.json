@@ -1,0 +1,7 @@
+{
+  "accepted_for_deployment": false,
+  "reason": "Existing ONNX export numerical parity failed; TorchScript alone is not SDK ONNX deployment",
+  "evidence": "/home/ubuntu/cyq_shixi_projects/m20_heightmap_ws/evidence/student_v3_20261017/model_export_result.json",
+  "quarantined_onnx": "/home/ubuntu/cyq_shixi_projects/m20_heightmap_ws/evidence/student_v3_20261017/model_export_failed_10500.onnx",
+  "checkpoint_sha256": "e8472717515551642a5d6dd1cf75fcb2ccc02d942464a5ea0454aa6cedfc9c78"
+}

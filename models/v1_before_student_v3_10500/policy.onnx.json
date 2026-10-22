@@ -1,0 +1,23 @@
+{
+  "profile": "v1",
+  "input_shape": [
+    1,
+    789
+  ],
+  "output_shape": [
+    1,
+    16
+  ],
+  "input_name": "obs",
+  "output_name": "actions",
+  "opset": 17,
+  "providers": [
+    "CPUExecutionProvider"
+  ],
+  "policy_sha256": "eda6af6985781c0517493e1942ece3280784a66e7a54103bfc080087a2906fa8",
+  "torchscript_sha256": "a4819a45890b2f506b1cf9a337bced92c7b505817e3ab9dedb9b31bd0d7614c4",
+  "contract_sha256": "f27f83aa73bebdb86271a5811930ae3d1a455f31d4b8a9510e0c68d953f4ed72",
+  "parity_samples": 32,
+  "max_abs_error": 0.0001983642578125,
+  "scope": "CPU numerical export parity, not robot closed-loop"
+}

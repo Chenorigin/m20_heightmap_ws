@@ -1,0 +1,128 @@
+{
+  "profile": "v1",
+  "training_task": "Rough-Deeprobotics-M20-Student-v3",
+  "checkpoint_iteration": 10500,
+  "checkpoint_sha256": "e8472717515551642a5d6dd1cf75fcb2ccc02d942464a5ea0454aa6cedfc9c78",
+  "policy_sha256": "e4183858b3b126e2895f2eace204f8eeb62ce2031d0ecc7439a82a49be1f3498",
+  "torchscript_sha256": "ba03bbfe865f0f170226f4312f71409cc5db9b79ccea950bddfa35899084887c",
+  "contract_sha256": "f27f83aa73bebdb86271a5811930ae3d1a455f31d4b8a9510e0c68d953f4ed72",
+  "input_shape": [
+    1,
+    789
+  ],
+  "output_shape": [
+    1,
+    16
+  ],
+  "input_name": "obs",
+  "output_name": "actions",
+  "opset": 17,
+  "passed": false,
+  "status": "numerical_parity_failed_user_authorized_startup_preparation",
+  "atol": 2e-05,
+  "rtol": 2e-05,
+  "parity_samples": 32,
+  "parity_output_values": 512,
+  "bad_elements": 3,
+  "bad_frames": 3,
+  "max_abs_error": 0.00017547607421875,
+  "max_error_over_allowed": 1.6595702171325684,
+  "x86_cpu_measured": {
+    "all_32_inputs_pass_original_tolerance": false,
+    "samples": 32,
+    "outputs": 512,
+    "bad_elements": 3,
+    "bad_frames": 3,
+    "max_absolute_error": 0.00017547607421875,
+    "max_error_over_allowed": 1.6595702171325684,
+    "rms_error": 3.8055601180531085e-05,
+    "worst_elements": [
+      {
+        "sample": 4,
+        "action": 1,
+        "actual": 0.7610725164413452,
+        "reference": 0.7610159516334534,
+        "absolute_error": 5.65648078918457e-05,
+        "allowed_error": 3.522031693137251e-05
+      },
+      {
+        "sample": 10,
+        "action": 3,
+        "actual": 0.6701360940933228,
+        "reference": 0.6700806617736816,
+        "absolute_error": 5.543231964111328e-05,
+        "allowed_error": 3.3401611290173605e-05
+      },
+      {
+        "sample": 26,
+        "action": 2,
+        "actual": 1.8892006874084473,
+        "reference": 1.8891321420669556,
+        "absolute_error": 6.854534149169922e-05,
+        "allowed_error": 5.7782643125392497e-05
+      }
+    ]
+  },
+  "AOS_ARM_measured": {
+    "scope": "ARM AOS standalone no ROS no motor interface",
+    "shape": [
+      32,
+      16
+    ],
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "bad_elements": 3,
+    "max_abs_error": 0.00017547607421875,
+    "passed": false
+  },
+  "AOS_ARM_receipt": {
+    "source_path": "/home/ubuntu/cyq_shixi_projects/m20_heightmap_ws/evidence/student_v3_20261017/arm_parity.json",
+    "sha256": "11dd77e79f8d4b4bc22039a648737e380d3934abe52ef85ade77f924330cda14",
+    "original_receipt_embedded_above": true,
+    "original_receipt_contains_model_hash": false,
+    "artifact_association": "root provided this receipt as the AOS measurement for the original10500 graph; original receipt itself contains no artifact hash"
+  },
+  "static_shape_check_existing_evidence": {
+    "input": [
+      [
+        "obs",
+        [
+          1,
+          789
+        ]
+      ]
+    ],
+    "output": [
+      [
+        "actions",
+        [
+          1,
+          16
+        ]
+      ]
+    ],
+    "checker": "passed",
+    "opsets": [
+      [
+        "",
+        17
+      ]
+    ],
+    "accepted_for_deployment": false
+  },
+  "authorization_override": {
+    "question_verbatim": "你这次“先启动策略”是否明确撤销此前“v3 未通过原数值门槛就不启动”的要求？当前仍是 3/512 个动作值超限；SDK 启动会发送电机初始化命令。",
+    "answer_verbatim": "撤销这项启动阻拦，继续实机启动准备",
+    "latest_user_message_verbatim": "你先启动策略，在策略运行过程中采数据",
+    "scope": "User explicitly removes the numerical-failure startup block for the unchanged model_10500; this does not change the numerical result or threshold.",
+    "provided_by": "root agent relaying exact user question and answer",
+    "physical_conditions_confirmation_included": false,
+    "physical_motion_authorization_included": false
+  },
+  "source_receipts": {
+    "/home/ubuntu/cyq_shixi_projects/m20_heightmap_ws/evidence/student_v3_20261017/model_export_result.json": "1521ca0b2eae1176fbda143010e9b6254fb838fd5403671c3e7b83549d2ab764",
+    "/home/ubuntu/cyq_shixi_projects/m20_heightmap_ws/evidence/student_v3_20261017/model_export_numerical_diagnosis.json": "33eaa117a18348d8857a5ac9542c7668a2002361f00e4428b32048a1e1737102",
+    "/home/ubuntu/cyq_shixi_projects/m20_heightmap_ws/evidence/student_v3_20261017/arm_parity.json": "11dd77e79f8d4b4bc22039a648737e380d3934abe52ef85ade77f924330cda14"
+  },
+  "scope": "Packaged original failed ONNX graph and original TorchScript export without changing checkpoint, graph weights, numerical expectations, samples or threshold. No new inference or robot access. Authorised startup exception is distinct from numerical acceptance; passed remains false."
+}
