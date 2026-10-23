@@ -72,6 +72,16 @@ python3 scripts/view_lidar_debug.py \
   --terrain-source candidate --cloud front --origin front --layer height_delta
 ```
 
+楼梯点云先锐化再成图的离线对照也已完成。最终候选仅投影有实测局部表面支撑的点Z，不加点、不改XY，不按台阶尺寸造型，再走原版187格成图。反例与来源时效修正后，平面解析噪声MSE约降16%，但复用站姿有效格中位数仍30、趴姿仍4，真实精度没有证实，暂不采用。完整有利/不利结果见[点云锐化报告](../rl_training/logs/evaluation/m20_point_sharpen_20261023/report.md)；算法、评测工具和独立回归保留在 `experiment/point-sharpen-20261023` 分支。
+
+对提供显式点云对应关系的新记录，来源栏会同步切换原版/候选点云与高程，点云标题标明离线处理；缺失的对照不会回退成真实点云。前雷达原点与差值图层仍可使用：
+
+```bash
+python3 scripts/view_lidar_debug.py \
+  --replay ../rl_training/logs/evaluation/m20_point_sharpen_20261023/standing_final/display.jsonl \
+  --terrain-source candidate --cloud front --origin front --layer ground_z
+```
+
 ## 1. 最容易接错的模型契约
 
 | 模型 | 实际输入顺序 | 维数 |

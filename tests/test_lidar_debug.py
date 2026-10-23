@@ -198,3 +198,17 @@ def test_same_frame_height_difference_requires_common_fresh_support():
     del packet['streams']['terrain_baseline']
     with pytest.raises(ValueError,match='缺少'):
         viewer.height_difference(packet,'candidate',0.,2.,False)
+
+
+def test_explicit_cloud_comparison_switches_without_missing_source_fallback():
+    original={'xyz':[[0.,0.,0.]]};candidate={'xyz':[[0.,0.,.005]]}
+    packet={'streams':{'front':original,'front_baseline':original,'front_candidate':candidate},
+            'cloud_comparison':{'baseline':'front_baseline','candidate':'front_candidate'},
+            'cloud_source_labels':{'front_candidate':'offline measured-point projection'}}
+    assert viewer.selected_cloud(packet,'front','baseline')[0] is original
+    selected,label=viewer.selected_cloud(packet,'front','candidate')
+    assert selected is candidate and label=='offline measured-point projection'
+    del packet['streams']['front_candidate']
+    assert viewer.selected_cloud(packet,'front','candidate')[0] is None
+    # Existing recordings without an explicit comparison retain actual front cloud.
+    assert viewer.selected_cloud({'streams':{'front':original}},'front','candidate')[0] is original

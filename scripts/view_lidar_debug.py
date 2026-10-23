@@ -76,6 +76,15 @@ def selected_terrain(data, selection):
     return data.get("streams", {}).get(key) if data else None
 
 
+def selected_cloud(data, key, selection):
+    """Follow explicit experimental cloud correspondence; never substitute it."""
+    if not data:
+        return None, key
+    if key == "front" and selection in data.get("cloud_comparison", {}):
+        key = data["cloud_comparison"][selection]
+    return data.get("streams", {}).get(key), data.get("cloud_source_labels", {}).get(key, key)
+
+
 def height_difference(data, selection, elapsed, hz, strict):
     """Compare only explicitly supplied, matching time/geometry observation pairs."""
     current, baseline = selected_terrain(data, selection), selected_terrain(data, "baseline")
@@ -274,8 +283,8 @@ def run_gui(args, stream):
             p.setPen(QtGui.QColor("#edf3fc"))
             data, elapsed, state = stream.snapshot()
             key = "front" if window.cloud_mode.currentIndex() else "raw"
-            cloud = data.get("streams", {}).get(key) if data else None
-            p.drawText(18, 28, "前向扇形点云" if key == "front" else "完整雷达点云")
+            cloud, label = selected_cloud(data, key, window.terrain_selection())
+            p.drawText(18, 28, label if label != key else "前向扇形点云" if key == "front" else "完整雷达点云")
             if cloud is None:
                 p.drawText(18, 60, "尚未收到真实点云；请检查 GOS 感知是否正在运行")
                 return
@@ -324,7 +333,7 @@ def run_gui(args, stream):
             # Scan header age includes scan duration. This is a display warning only.
             limit = data["limits"]["cloud_frame_age_s"] + data["limits"]["scan_duration_s"]
             stale = cloud["silence_s"] + elapsed > limit or age > limit or age < -data["limits"]["future_tolerance_s"]
-            p.drawText(18, 53, f"原点：{window.origin_label()} | 原始 {cloud['source_points']} 点 / 显示 {len(points)} 点")
+            p.drawText(18, 53, f"原点：{window.origin_label()} | 来源 {cloud['source_points']} 点 / 显示 {len(points)} 点")
             p.drawText(18, 75, f"源 frame: {cloud['frame']} · 保持原坐标轴方向")
             p.drawText(18, self.height() - 25, f"{'过期/断流' if stale else '最近收到'} · 扫描 header 年龄 {age * 1000:.0f} ms · 拖动旋转，滚轮缩放")
 
@@ -514,6 +523,7 @@ def run_gui(args, stream):
             data, elapsed, state = stream.snapshot()
             if data:
                 identity = data["identity"]
+                self.cloud_mode.setItemText(1, "随高程来源切换的对照点云" if data.get("cloud_comparison") else "实际送入 mapper 的前向点云")
                 labels = data.get("terrain_source_labels", {})
                 for index, key in enumerate(TERRAIN_SOURCES):
                     label = labels.get(key) if isinstance(labels, dict) else None
