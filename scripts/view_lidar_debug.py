@@ -65,7 +65,7 @@ def origin_offset(payload, selection):
 
 
 TERRAIN_SOURCES = ("default", "baseline", "candidate", "published")
-TERRAIN_LABELS = ("当前数据源", "原版旁路", "边界余量候选（未接入模型）", "板端实际发布")
+TERRAIN_LABELS = ("当前数据源", "原版旁路", "候选旁路（未接入模型）", "板端实际发布")
 
 
 def selected_terrain(data, selection):
@@ -481,6 +481,10 @@ def run_gui(args, stream):
             data, elapsed, state = stream.snapshot()
             if data:
                 identity = data["identity"]
+                labels = data.get("terrain_source_labels", {})
+                for index, key in enumerate(TERRAIN_SOURCES):
+                    label = labels.get(key) if isinstance(labels, dict) else None
+                    self.terrain_mode.setItemText(index, label[:80] if isinstance(label, str) and label else TERRAIN_LABELS[index])
                 self.status.setText(f"{state} | {identity['board']} | serial={identity['serial']} | "
                     f"最后数据到达 {elapsed:.1f}s 前 | {args.hz:g} Hz 显示采样\n"
                     f"raw={data['topics']['raw']}  →  mapper={data['topics']['front']}  →  terrain={data['topics']['terrain']}\n"

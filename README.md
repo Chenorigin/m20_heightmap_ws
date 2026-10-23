@@ -46,12 +46,20 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 /usr/bin/python3 scripts/view_lidar_deb
 
 历史 JSONL 可通过 `--replay FILE --cloud front` 查看，界面始终标为回放，并按记录采集时的年龄显示；不能用回放证明当前真机已接通。默认不连续写盘；“保存当前数据和截图”记录的是显示抽样与一帧高程，不能称为无损原始录制。关闭窗口会停止本次 SSH 采集。既有纯感知链是独立、有上限的调试会话，关闭查看器不会启动或停止机器人控制服务；2026-10-23 本次在线对照的临时感知进程已主动停止。
 
-来源选择支持“当前数据源／原版旁路／边界余量候选（未接入模型）／板端实际发布”。仅显示记录中明确携带的来源，缺失时不会回退到其它来源。截图 JSON 同时记录来源、原点和图层；格子与悬停共用断流判据。2026-10-23 的内部边界余量实验没有在近静态窗口增加有效格，且影响了去畸变分桶的代表时间，候选未部署；完整结果和适用边界见[实验报告](../rl_training/logs/evaluation/m20_heightmap_margin_online_20261023/report.md)。回放本轮数据：
+来源选择支持“当前数据源／原版旁路／候选旁路（未接入模型）／板端实际发布”；实验记录可明确提供各来源名称，例如 Patchwork++ 分割候选。仅显示记录中明确携带的来源，缺失时不会回退到其它来源。截图 JSON 同时记录来源、原点和图层；格子与悬停共用断流判据。2026-10-23 的内部边界余量实验没有在近静态窗口增加有效格，且影响了去畸变分桶的代表时间，候选未部署；完整结果和适用边界见[实验报告](../rl_training/logs/evaluation/m20_heightmap_margin_online_20261023/report.md)。回放本轮数据：
 
 ```bash
 python3 scripts/view_lidar_debug.py \
   --replay ../rl_training/logs/evaluation/m20_heightmap_margin_online_20261023/live_baseline.jsonl \
   --terrain-source baseline --cloud front --origin front
+```
+
+2026-10-23 后续离线研究同时比较了点云分割与原 187 个位置上的高程提取。Patchwork++ 的有效格中位数为 4→7，但有原有效格损失且缺少高度真值；带实测支撑约束的局部平面查询为 4→1，因此候选均未接入模型。结果、反例、论文来源与同帧截图见[研究报告](../rl_training/logs/evaluation/m20_surface_research_20261023/report.md)。实验代码仅保存在 `experiment/surface-query-20261023` 分支。回放候选时可在来源栏切换原版：
+
+```bash
+python3 scripts/view_lidar_debug.py \
+  --replay ../rl_training/logs/evaluation/m20_surface_research_20261023/segmentation_export/segmentation_display.jsonl \
+  --terrain-source candidate --cloud front --origin front
 ```
 
 ## 1. 最容易接错的模型契约
