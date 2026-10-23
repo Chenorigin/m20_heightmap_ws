@@ -66,6 +66,7 @@ def origin_offset(payload, selection):
 
 TERRAIN_SOURCES = ("default", "baseline", "candidate", "published")
 TERRAIN_LABELS = ("当前数据源", "原版旁路", "候选旁路（未接入模型）", "板端实际发布")
+LAYERS = ("height", "ground_z", "validity", "confidence", "age", "variance", "height_delta")
 
 
 def selected_terrain(data, selection):
@@ -73,6 +74,22 @@ def selected_terrain(data, selection):
         raise ValueError("unknown terrain source")
     key = "terrain" if selection == "default" else "terrain_" + selection
     return data.get("streams", {}).get(key) if data else None
+
+
+def height_difference(data, selection, elapsed, hz, strict):
+    """Compare only explicitly supplied, matching time/geometry observation pairs."""
+    current, baseline = selected_terrain(data, selection), selected_terrain(data, "baseline")
+    if current is None or baseline is None:
+        raise ValueError("缺少原版或当前来源，无法比较")
+    identity_keys = ("frame", "profile", "geometry_hash", "sequence")
+    if (any(k not in current or k not in baseline or current[k] != baseline[k] for k in identity_keys) or
+            "stamp" not in current or "stamp" not in baseline or
+            not np.isfinite([current["stamp"], baseline["stamp"]]).all() or
+            abs(current["stamp"] - baseline["stamp"]) > 1e-6):
+        raise ValueError("两个来源的时间或坐标不一致，无法比较")
+    a, known, *_ = displayed_cell_state(current, elapsed, data["limits"], hz, strict)
+    b, base_known, *_ = displayed_cell_state(baseline, elapsed, data["limits"], hz, strict)
+    return 1000.*(a["height"]-b["height"]), known & base_known
 
 
 def grid_layout(width, height, offset):
@@ -338,14 +355,21 @@ def run_gui(args, stream):
                 p.drawText(18, 60, "高程协议错误：" + str(exc))
                 return
             k = window.grid_mode.currentIndex()
-            names = ["height", "ground_z", "validity", "confidence", "age", "variance"]
-            key = names[k]
-            values = -.5 - a["height"] - offset[2] if key == "ground_z" else ages if key == "age" else a[key]
+            key = LAYERS[k]
+            if key == "height_delta":
+                try:
+                    values, comparable = height_difference(data, window.terrain_selection(), elapsed, args.hz, strict)
+                    known &= comparable
+                except ValueError as exc:
+                    p.drawText(18, 60, "差值不可用：" + str(exc))
+                    return
+            else:
+                values = -.5 - a["height"] - offset[2] if key == "ground_z" else ages if key == "age" else a[key]
             if key == "ground_z":
                 known = known & (np.abs(a["height"]) < 1.)
             lo, hi = {"height": (-.25, .25), "validity": (0., 1.), "confidence": (0., 1.),
                       "ground_z": (-.7, .3),
-                      "age": (0., data["limits"]["max_cell_age_s"]), "variance": (0., .01)}[key]
+                      "age": (0., data["limits"]["max_cell_age_s"]), "variance": (0., .01), "height_delta": (-10., 10.)}[key]
             if key in ("height", "ground_z") and known.any():
                 lo, hi = float(values[known].min()), float(values[known].max())
                 if hi - lo < .02:
@@ -376,11 +400,12 @@ def run_gui(args, stream):
                 p.drawText(body + QtCore.QPointF(8, 14), "机身")
             p.setPen(QtGui.QColor("white"))
             p.drawText(18, self.height() - 63, f"X 格中心 [{-.8-offset[0]:+.3f}, {.8-offset[0]:+.3f}] m · 原点：{window.origin_label()} · +X 向前")
-            mode = "当前时效有效" if strict else "采样时有效"
+            mode = "共同可比" if key == "height_delta" else "当前时效有效" if strict else "采样时有效"
             p.drawText(18, 62, f"源 frame: {terrain['frame']} | 源数据有效 {int(a['validity'].sum())}/187 | {mode} {int(known.sum())}/187")
             status = "数据断流" if disconnected else "未来时间异常" if future else ("当前时效通过" if strict else "显示采样快照") if fresh else "本帧过期"
             p.drawText(18, self.height() - 38, f"{status} · sequence {terrain['sequence']} · 色标 {key}：{lo:g} 蓝 → {hi:g} 红")
-            p.drawText(18, self.height() - 14, "Z 为相对所选原点的地面高度（由未饱和 h 换算）；策略 h 保持原定义。灰色 ? = 未知。")
+            note = "Δh = 当前来源 h − 原版 h，单位 mm；正值表示估计地面更低。灰色 ? = 不可比。" if key == "height_delta" else "Z 为相对所选原点的地面高度（由未饱和 h 换算）；策略 h 保持原定义。灰色 ? = 未知。"
+            p.drawText(18, self.height() - 14, note)
 
         def mouseMoveEvent(self, e):
             if self.layout_state is None or not self.grid_rect.contains(e.pos()):
@@ -398,11 +423,18 @@ def run_gui(args, stream):
                 a, known, ages, fresh, future, disconnected = displayed_cell_state(t, elapsed, data["limits"], args.hz, strict)
                 z = f"{-.5-a['height'][idx]-offset[2]:+.4f} m" if known[idx] and abs(a['height'][idx]) < 1 else "未知/已裁剪"
                 age_text = f"{ages[idx]*1000:.0f} ms" if a['age'][idx] >= 0 else "未知"
+                difference = ""
+                if window.grid_mode.currentIndex() == LAYERS.index("height_delta"):
+                    try:
+                        delta, comparable = height_difference(data, window.terrain_selection(), elapsed, args.hz, strict)
+                        difference = f" | Δh={delta[idx]:+.3f} mm" if comparable[idx] else " | Δh=不可比"
+                    except ValueError:
+                        difference = " | Δh=不可比"
                 window.details.setText(f"帧 {t['sequence']} 格 {idx} | 原点：{window.origin_label()} | x={-.8 + ix*.1-offset[0]:+.3f} m, y={-.5 + iy*.1-offset[1]:+.3f} m | "
                     f"Z={z} | "
                     f"h={a['height'][idx]:+.4f} m | valid(发送)={a['validity'][idx]:.0f} | "
                     f"{'当前' if strict else '采样时'}显示={'有效' if known[idx] else '未知'} | c={a['confidence'][idx]:.3f} | "
-                    f"age={age_text} | variance={a['variance'][idx]:.5f} m²")
+                    f"age={age_text} | variance={a['variance'][idx]:.5f} m²" + difference)
 
     class Window(QtWidgets.QMainWindow):
         def __init__(self):
@@ -429,7 +461,8 @@ def run_gui(args, stream):
             self.cloud_mode.addItems(["完整雷达点云", "实际送入 mapper 的前向点云"])
             self.cloud_mode.setCurrentIndex(int(args.cloud == "front"))
             self.grid_mode = QtWidgets.QComboBox()
-            self.grid_mode.addItems(["模型高度 h (m)", "相对原点地面高度 Z (m)", "有效性", "置信度", "单格年龄 (s)", "方差 (m²)"])
+            self.grid_mode.addItems(["模型高度 h (m)", "相对原点地面高度 Z (m)", "有效性", "置信度", "单格年龄 (s)", "方差 (m²)", "与原版高度差 Δh (mm)"])
+            self.grid_mode.setCurrentIndex(LAYERS.index(getattr(args, "layer", "height")))
             self.origin_mode = QtWidgets.QComboBox()
             self.origin_mode.setObjectName("origin_mode")
             self.origin_mode.addItems(["原点：机身中心", "原点：前方雷达"])
@@ -552,6 +585,7 @@ def main():
     p.add_argument("--cloud", choices=("raw", "front"), default="raw")
     p.add_argument("--origin", choices=("body", "front"), default="body", help="display origin; axes keep their existing directions")
     p.add_argument("--terrain-source", choices=TERRAIN_SOURCES, default="default", help="select an explicitly supplied terrain stream; absent sources stay unavailable")
+    p.add_argument("--layer", choices=LAYERS, default="height", help="initial displayed layer; height_delta requires a matching baseline")
     p.add_argument("--seconds", type=float, default=1800)
     p.add_argument("--hz", type=float, default=2)
     p.add_argument("--max-points", type=int, default=3000)

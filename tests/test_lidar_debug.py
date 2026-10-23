@@ -176,3 +176,25 @@ def test_display_and_hover_share_disconnect_and_replay_aging():
     assert stale[-1] and not stale[1].any()
     t['silence_s']=2.
     assert not viewer.displayed_cell_state(t,0.,limits,2.,False)[1].any()
+
+
+def test_same_frame_height_difference_requires_common_fresh_support():
+    import copy
+    base = collector.terrain_payload(message(), {"profile":"v1","frames":{"output":"base_yaw"}})
+    base.update(header_age_s=0., silence_s=0.)
+    base['validity'][0]=1.;base['age'][0]=.1
+    candidate=copy.deepcopy(base);candidate['height'][0]=.005
+    candidate['validity'][1]=1.;candidate['age'][1]=.1
+    packet={'streams':{'terrain_baseline':base,'terrain_candidate':candidate},
+            'limits':{'max_cell_age_s':.5,'terrain_frame_age_s':.12,'future_tolerance_s':.005}}
+    original=copy.deepcopy(packet)
+    delta,known=viewer.height_difference(packet,'candidate',0.,2.,False)
+    assert known.sum()==1 and delta[0]==pytest.approx(5.)
+    assert not viewer.height_difference(packet,'candidate',.2,2.,True)[1].any()
+    assert packet==original
+    candidate['sequence']+=1
+    with pytest.raises(ValueError,match='不一致'):
+        viewer.height_difference(packet,'candidate',0.,2.,False)
+    del packet['streams']['terrain_baseline']
+    with pytest.raises(ValueError,match='缺少'):
+        viewer.height_difference(packet,'candidate',0.,2.,False)

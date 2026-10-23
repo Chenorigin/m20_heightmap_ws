@@ -62,6 +62,16 @@ python3 scripts/view_lidar_debug.py \
   --terrain-source candidate --cloud front --origin front
 ```
 
+2026-10-23 站姿及后退复测保持同一冻结算法与输入维度。细粒度局部表面查询让站姿有效格中位数由30降至19，未采用；只对原有效格去噪使首次站姿邻帧高程变化RMS下降约6%，但最大变化上升约8%，小凸起反例也会失真。后退位置12帧的第一级上下层高度差中位数为原版15.63cm、去噪15.61cm，不能据此认定精度提升。全部证据、失败采集、反例与跳过项见[本轮报告](../rl_training/logs/evaluation/m20_query_local_20261023/report.md)，候选源码和正式测试保留在 `experiment/query-local-surfaces-20261023` 分支。
+
+新增“高度差 Δh”图层，只比较时间、坐标、几何和序号一致的原版与候选共同新鲜有效格，单位毫米；缺少可比来源时明确显示不可比。后退位置实际板端发布与离线候选的同帧回放：
+
+```bash
+python3 scripts/view_lidar_debug.py \
+  --replay ../rl_training/logs/evaluation/m20_query_local_20261023/standing_back/comparison/display.jsonl \
+  --terrain-source candidate --cloud front --origin front --layer height_delta
+```
+
 ## 1. 最容易接错的模型契约
 
 | 模型 | 实际输入顺序 | 维数 |
