@@ -22,6 +22,38 @@ GitHub 仓库包含源码、配置、模型与测试；`evidence/` 历史实测�
 
 旧狗10月16日三级木楼梯真实数据：独立参考层高约14–15cm，首级踏面生产重放与原始点支持比较的高度偏差p95约5.8mm；存在单帧覆盖波动，没有上下楼动态样本。见[数据汇总](evidence/stairs_reference_20261016/summary.json)、[对照图](evidence/stairs_reference_20261016/stairs_reference.png)及[分析边界](docs/TERRAIN_OFFLINE_FIX_20261016.md)。该次为只读监听，采集器已退出；其结果不能代替新狗验证。
 
+## 实时点云与高程调试（只读）
+
+桌面入口为 `scripts/view_lidar_debug.py`，需要本机 Python 3、NumPy 和 PyQt5。它通过 SSH 在 **GOS** 临时执行 `scripts/stream_lidar_debug.py`，读取正在运行的感知话题；不写板端脚本、不启动感知或 SDK。左右分别显示完整/前向点云与高程观测，可切换高度、有效性、置信度、年龄、方差，悬停查看数值，保存 JSON 和截图。原厂融合云虽标 `lidar_link`，其点已经转换到机体系；高程保持 `base_yaw` 的重力对齐轴。两栏没有做时空配准叠加。
+
+显示工具栏增加“原点：机身中心／前方雷达”。前雷达位置来自当前 runtime 引用的 `site.json`，没有另存一套安装数值。切换会同步平移点云、高程格坐标、原点标记与悬停读数；高程图按查询时刻的位姿把安装杆臂转换到重力对齐坐标，保留俯仰/侧倾影响。高程格不重采样，生产消息、模型 h 和策略输入保持原定义。“相对原点地面高度 Z”由未裁剪的 h 换算，未知/裁剪格不显示成真实高度。缺少安装参数或对应时刻位姿时明确提示，不猜测前雷达位置；旧 JSONL 缺少这类元数据时仍可用机身原点回放。启动可加 `--origin front` 预选前雷达，截图 JSON 会记录当前显示原点。
+
+2026-10-23 已通过 1515 的 AOS 跳板连上 GOS，核对两板序列号后启动有时限的既有纯感知链，桌面界面已接收真实完整点云、前向点云和 schema 2 高程。当前运行版本仍取板端 `current`，没有覆盖感知源码、参数或启动 SDK。验收窗口和实际资源读数见[本轮实测](../rl_training/logs/evaluation/m20_lidar_debug_20261023/live_capture_summary.json)与[验证记录](../rl_training/logs/evaluation/m20_lidar_debug_20261023/verification.json)。初始 SSH 密钥失败和金库拒绝不代表板卡不可用；本轮由用户直接提供会话凭据后成功。请用已核验的 GOS SSH 别名与跳板，不能将网关直接当作 GOS；采集器会核验板卡角色，拒绝在 AOS/NOS 上执行。
+
+```bash
+cd /home/ubuntu/cyq_shixi_projects/m20_heightmap_ws
+# GOS_ALIAS 与 GATEWAY_ALIAS 替换为本次核对过的 SSH 入口。
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 /usr/bin/python3 scripts/view_lidar_debug.py \
+  --ssh-target GOS_ALIAS --jump GATEWAY_ALIAS \
+  --output ../rl_training/logs/evaluation/m20_lidar_debug/snapshots
+```
+
+支持直接 SSH 时省略 `--jump`。SSH 保持主机密钥核验，首次连接需先用正常 SSH 核验并信任主机。密码连接需要本机 Paramiko；每一跳独立认证并核验已知主机密钥，避免嵌套 sshpass 争用密码提示。若两跳共用金库中的板端凭据，可先执行 `eval "$(getsecret M20_NEW_BOARD_PW)"`，再给上述命令加 `--password-env M20_NEW_BOARD_PW`；变量为空会拒绝，不将密码写入参数或文件。只读工具不会绕过金库的发放限制。用户直接授权的会话凭据也可通过 `read -rs M20_SESSION_PW; export M20_SESSION_PW` 输入，再指定 `--password-env M20_SESSION_PW`，不要将密码写入脚本或命令参数。
+
+板端按运行配置推算缓冲和 Python/ROS 内存预算，读取整机可用内存及 load 后再订阅；使用单执行器、NumPy 单线程、低调度优先级和有上限的会话，显示抽样不改变生产点云。显示频率、点数、时长均可用 `--hz`、`--max-points`、`--seconds` 在脚本限制内设置。当前输出只供人工调试，不是 SDK 的实时性验收工具。默认显示每次采样时的高程快照，并明确标注“采样时有效”；断流后清空过期显示。勾选“严格实时效期”会进一步计入显示等待，低显示采样率下可用格可能在下次刷新前归零；这不是生产 mapper 停止更新的证据。“源数据有效”始终保留来源记录中的统计，旁路结果不冒称板端发布。
+
+灰色问号代表未知或过期；未知格的 `age=-1` 是合法发送端哨兵。工具按生产 schema 2 解码，使用 GOS 的 ROS 时间计算源帧年龄，再以本机 monotonic 时间累计显示等待，不比较两机 wall clock。界面区分采样快照与严格实时效期，断流不会继续把旧地形标成当前有效；完整点云和前向点云仅为显示抽样，保留各自 frame、原始点数和 header 时间。配置/ROS 缺失、话题无数据、协议错误都会显示出来，不自动恢复或更改原感知服务。
+
+历史 JSONL 可通过 `--replay FILE --cloud front` 查看，界面始终标为回放，并按记录采集时的年龄显示；不能用回放证明当前真机已接通。默认不连续写盘；“保存当前数据和截图”记录的是显示抽样与一帧高程，不能称为无损原始录制。关闭窗口会停止本次 SSH 采集。既有纯感知链是独立、有上限的调试会话，关闭查看器不会启动或停止机器人控制服务；2026-10-23 本次在线对照的临时感知进程已主动停止。
+
+来源选择支持“当前数据源／原版旁路／边界余量候选（未接入模型）／板端实际发布”。仅显示记录中明确携带的来源，缺失时不会回退到其它来源。截图 JSON 同时记录来源、原点和图层；格子与悬停共用断流判据。2026-10-23 的内部边界余量实验没有在近静态窗口增加有效格，且影响了去畸变分桶的代表时间，候选未部署；完整结果和适用边界见[实验报告](../rl_training/logs/evaluation/m20_heightmap_margin_online_20261023/report.md)。回放本轮数据：
+
+```bash
+python3 scripts/view_lidar_debug.py \
+  --replay ../rl_training/logs/evaluation/m20_heightmap_margin_online_20261023/live_baseline.jsonl \
+  --terrain-source baseline --cloud front --origin front
+```
+
 ## 1. 最容易接错的模型契约
 
 | 模型 | 实际输入顺序 | 维数 |
