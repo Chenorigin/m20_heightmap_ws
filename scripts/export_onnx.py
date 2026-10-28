@@ -26,6 +26,13 @@ def main():
     if args.output.exists():
         raise ValueError("Use a new ONNX output path; do not overwrite an existing release")
     actual = json.loads(args.contract.read_text())
+    if actual.get("deployment_family") == "m20_cts_student":
+        if args.profile != "v1":raise ValueError("CTS requires profile v1")
+        from export_cts_onnx import export_onnx
+        print(json.dumps(export_onnx(args.model,args.contract,args.output),indent=2))
+        return
+    from m20_heightmap.cts import require_hardware_runtime
+    require_hardware_runtime(actual)
     spec = contract(args.profile, actual.get("history_steps", 1))
     validate_model_contract(args.contract, spec)
     torch.set_num_threads(1)

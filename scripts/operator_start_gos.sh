@@ -10,6 +10,12 @@ python3 - "$profile" <<'PY'
 import sys
 from m20_heightmap.runtime import load_config
 load_config('runtime/heightmap_'+sys.argv[1]+'.local.json')
+import json
+from pathlib import Path
+model=Path('models')/sys.argv[1]
+if json.loads((model/'observation_contract.json').read_text()).get('deployment_family')=='m20_cts_student':
+    from scripts.validate_cts_bundle import validate
+    validate(model,check_model=False)
 PY
 mkdir -p runtime
 exec 9>runtime/perception.lock

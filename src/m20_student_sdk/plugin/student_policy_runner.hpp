@@ -3,6 +3,9 @@
 #include "json.hpp"
 #include "student_control_core.hpp"
 #include "student_trace.hpp"
+#include "student_heading_feedback.hpp"
+#include "cts_execution.hpp"
+#include "cts_execution_mode.hpp"
 #include <m20_heightmap_msgs/msg/terrain_observation.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <array>
@@ -15,6 +18,7 @@
 #include <mutex>
 #include <set>
 #include <thread>
+#include <functional>
 
 // Used only inside the existing official SDK FSM after the operator starts it.
 // This class does not publish motor commands. The SDK remains the only writer.
@@ -50,6 +54,18 @@ class M20PolicyRunner : public PolicyRunnerBase {
   bool terrain_source_session_hold_enabled_=true;
   bool warned_=false;
   std::unique_ptr<StudentControlCore> control_;
+  std::unique_ptr<StudentHeadingFeedback> heading_;
+  bool cts_=false;
+  bool cts_nominal_pd_=false,have_nominal_issued_=false;
+  RobotAction nominal_issued_;
+  std::function<void()> pending_cts_trace_;
+  bool pending_substep_trace_=false;
+#ifdef M20_CTS_OFFLINE_REPLAY
+  float replay_after_inference_delay_s_=0;
+#endif
+  std::unique_ptr<m20_cts::Execution> cts_execution_;
+  std::array<bool,187> policy_map_mask_{};
+  uint64_t feedback_step_=0;
   double tick_elapsed_s_=0;
   static constexpr double kMinTickIntervalS=.010;
   double max_tick_interval_s_=.025;
@@ -71,6 +87,7 @@ class M20PolicyRunner : public PolicyRunnerBase {
   int trace_valid_=-1;
   int trace_front_valid_=-1,trace_rear_valid_=-1;
   std::array<float,16> trace_raw_{};
+  std::array<float,3> trace_raw_command_{};
   bool trace_inferred_=false;
   bool trace_full_observation_=true;
   std::vector<float> trace_observation_;
@@ -131,6 +148,7 @@ class M20PolicyRunner : public PolicyRunnerBase {
       const auto& attempt=trace_attempts_[i];
       nlohmann::json row={{"event","inference_attempt"},{"inference_attempt",i},
         {"observation",attempt.observation},{"input_dim",dim_},
+        {"raw_command",trace_raw_command_},{"cts_dual_input",cts_},
         {"inference_start_stamp",attempt.start_stamp},{"inference_end_stamp",attempt.end_stamp},
         {"has_output",attempt.has_output},{"disposition",attempt.disposition},{"reason",attempt.reason},
         {"terrain_input_mode",attempt.terrain_input_mode}};
@@ -146,7 +164,7 @@ class M20PolicyRunner : public PolicyRunnerBase {
     std::ifstream f(value);if(!f)throw std::runtime_error(std::string("cannot read ")+key);
     nlohmann::json j;f>>j;return j;
   }
-  void reset() {history_.assign(history_steps_-1,{});have_tick_=false;}
+  void reset() {history_.assign(history_steps_-1,{});have_tick_=false;feedback_step_=0;if(heading_)heading_->Reset();}
   void receive(Terrain::SharedPtr t) {
     nlohmann::json stamp,row;
     trace_only([&]{stamp=StudentTrace::Stamp();row=terrain_payload(*t);
@@ -180,6 +198,10 @@ class M20PolicyRunner : public PolicyRunnerBase {
   }
   RobotAction hold(const RobotBasicState&,const std::string& reason) {
     auto target=control_->Hold(reason);
+    if(cts_execution_)target=cts_execution_->Hold(target);
+    if(cts_nominal_pd_&&have_nominal_issued_){
+      target=nominal_issued_;target.goal_joint_vel.setZero();target.tau_ff.setZero();
+    }
     if(!warned_){std::cerr<<"[STUDENT_HOLD_LATCHED] "<<control_->Reason()<<"; operator re-entry required"<<std::endl;warned_=true;}
     return target;
   }
@@ -191,8 +213,6 @@ public:
       const auto& value=robot_.at("policy").at("max_tick_interval_s");
       if(!value.is_number())throw std::runtime_error("max_tick_interval_s must be numeric");
       max_tick_interval_s_=value.get<double>();
-      // Keep the nominal 20ms policy. A whole missed policy period is not
-      // an admissible configuration of this bounded scheduling tolerance.
       if(!std::isfinite(max_tick_interval_s_)||max_tick_interval_s_<.02||max_tick_interval_s_>=.04)
         throw std::runtime_error("max_tick_interval_s must be >=0.02 and <0.04");
     }
@@ -213,6 +233,22 @@ public:
     std::ifstream contract_file(contract_path);nlohmann::json contract_json;contract_file>>contract_json;
     if(contract_json.at("version")!=(profile_=="v0"?"m20_student_v0_618":"m20_student_v1")||contract_json.at("student_observation_dim")!=dim_||contract_json.at("action_dim")!=16||contract_json.at("slices").at("height")!=nlohmann::json({57,244})||contract_json.at("slices").at("validity")!=nlohmann::json({244,431})||contract_json.at("slices").at("confidence")!=nlohmann::json({431,618})||contract_json.at("grid").at("rows_y")!=11||contract_json.at("grid").at("columns_x")!=17)throw std::runtime_error("checkpoint observation contract mismatch");
     if(profile_=="v1"&&(contract_json.at("history_steps")!=history_steps_||contract_json.at("slices").at("past_proprio")!=nlohmann::json({618,789})))throw std::runtime_error("history contract mismatch");
+    cts_=contract_json.value("deployment_family",std::string())=="m20_cts_student";
+    if(!cts_&&contract_json.at("deployment_family")!="m20_student_v3_5")throw std::runtime_error("requires student-v3.5 or CTS deployment metadata");
+    cts_nominal_pd_=cts_&&m20_cts::ExecutionMode(cfg_)=="nominal_pd";
+    heading_=std::make_unique<StudentHeadingFeedback>(contract_json.at("command_feedback"));
+    const auto& perception=contract_json.at("perception");
+    if(!perception.at("front_only").get<bool>())throw std::runtime_error("this deployment requires front-only student sensor contract");
+    const auto sensor=perception.at("front_sensor_offset_m").get<std::vector<float>>();
+    const float fov=perception.at("lidar_horizontal_fov_deg").get<float>();
+    const float blind=perception.at("front_blind_distance_m").get<float>();
+    if(sensor.size()!=3||!std::isfinite(fov)||fov<=0||fov>360||!std::isfinite(blind)||blind<0)throw std::runtime_error("invalid sensor output mask");
+    for(float value:sensor)if(!std::isfinite(value))throw std::runtime_error("nonfinite front sensor transform");
+    for(int i=0;i<187;++i){
+      const float x=(i%17-8)*.1f,y=(i/17-5)*.1f;
+      const float dx=x-sensor[0],dy=y-sensor[1];
+      policy_map_mask_[i]=std::hypot(dx,dy)>blind+1.e-6f&&dx>0.f&&std::abs(std::atan2(dy,dx))<=fov*.5f*float(M_PI)/180.f+1.e-7f;
+    }
     policy_from_sdk_=robot_["joints"]["policy_from_sdk_indices"].get<std::vector<int>>();
     sdk_from_policy_=robot_["joints"]["sdk_from_policy_indices"].get<std::vector<int>>();
     if(policy_from_sdk_.size()!=16||sdk_from_policy_.size()!=16)throw std::runtime_error("invalid joint mapping");
@@ -251,16 +287,68 @@ public:
     for(double v:{static_cast<double>(map_age_),static_cast<double>(align_age_),static_cast<double>(tau_),static_cast<double>(min_fraction_),static_cast<double>(future_),reference,growth,body_age})if(!std::isfinite(v))throw std::runtime_error("nonfinite timing/quality limit");
     if(map_age_<=0||align_age_<=0||align_age_>map_age_||tau_<=0||min_fraction_<=0||min_fraction_>1||future_<=0||reference<=0||growth<0||body_age<=0)throw std::runtime_error("invalid deployment timing/quality limits");
     Ort::SessionOptions options;options.SetIntraOpNumThreads(1);options.SetInterOpNumThreads(1);
+    options.AddConfigEntry("session.disable_prepacking","1");
     session_=Ort::Session(env_,path.c_str(),options);
-    if(session_.GetInputCount()!=1||session_.GetOutputCount()!=1||session_.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape()!=std::vector<int64_t>({1,dim_})||session_.GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape()!=std::vector<int64_t>({1,16}))throw std::runtime_error("ONNX model does not match student profile");
+    if(session_.GetInputCount()!=(cts_?2u:1u)||session_.GetOutputCount()!=1||session_.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape()!=std::vector<int64_t>({1,dim_})||session_.GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape()!=std::vector<int64_t>({1,16}))throw std::runtime_error("ONNX model does not match student profile");
+    Ort::AllocatorWithDefaultOptions allocator;
+    auto metadata=session_.GetModelMetadata();
+    const char* expected_contract=std::getenv("M20_VERIFIED_MODEL_CONTRACT_SHA256");
+    auto embedded_contract=metadata.LookupCustomMetadataMapAllocated("contract_sha256",allocator);
+    if(!expected_contract||std::string(expected_contract).size()!=64||!embedded_contract||std::string(embedded_contract.get())!=expected_contract)
+      throw std::runtime_error("ONNX embedded contract digest differs from verified sidecar");
+    auto family=metadata.LookupCustomMetadataMapAllocated("deployment_family",allocator);
+    auto feedback=metadata.LookupCustomMetadataMapAllocated("command_feedback",allocator);
+    if(!family||std::string(family.get())!=(cts_?"m20_cts_student":"m20_student_v3_5")||!feedback||
+       nlohmann::json::parse(feedback.get())!=contract_json.at("command_feedback"))
+      throw std::runtime_error("ONNX feedback metadata disagrees with model contract");
+    if(cts_){
+      const auto raw_type=session_.GetInputTypeInfo(1);const auto raw_info=raw_type.GetTensorTypeAndShapeInfo();
+      auto raw_name=session_.GetInputNameAllocated(1,allocator);
+      auto embedded_control=metadata.LookupCustomMetadataMapAllocated("quiet_execution_control",allocator);
+      auto control_digest=metadata.LookupCustomMetadataMapAllocated("quiet_execution_control_sha256",allocator);
+      if(dim_!=789||std::string(raw_name.get())!="raw_command"||raw_info.GetShape()!=std::vector<int64_t>({1,3})||
+         raw_info.GetElementType()!=ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT||!embedded_control||!control_digest||
+         nlohmann::json::parse(embedded_control.get())!=contract_json.at("quiet_execution_control")||
+         std::string(control_digest.get())!=contract_json.at("quiet_execution_control_sha256").get<std::string>())
+        throw std::runtime_error("CTS embedded input/execution metadata mismatch");
+      if(!cts_nominal_pd_)
+        cts_execution_=std::make_unique<m20_cts::Execution>(contract_json,robot_,cfg_.at("frames").at("world").get<std::string>(),body_age);
+      // Initialize this session's lazy inference allocations before the first
+      // real servo deadline. Discard outputs; no history, target or PD update.
+      std::vector<float> warm_observation(dim_,0.f);
+      std::array<float,3> warm_command{};
+      const std::array<int64_t,2> warm_shape{1,dim_},warm_command_shape{1,3};
+      std::vector<Ort::Value> warm_inputs;
+      warm_inputs.push_back(Ort::Value::CreateTensor<float>(memory_,warm_observation.data(),warm_observation.size(),warm_shape.data(),2));
+      warm_inputs.push_back(Ort::Value::CreateTensor<float>(memory_,warm_command.data(),warm_command.size(),warm_command_shape.data(),2));
+      const char* warm_names[]={"obs","raw_command"};const char* warm_outputs[]={"actions"};
+      double first_ms=0,last_ms=0;
+      for(int pass=0;pass<8;++pass){
+        const auto begin=Clock::now();
+        auto result=session_.Run(Ort::RunOptions{nullptr},warm_names,warm_inputs.data(),2,warm_outputs,1);
+        last_ms=std::chrono::duration<double,std::milli>(Clock::now()-begin).count();
+        if(pass==0)first_ms=last_ms;
+        const auto* values=result[0].GetTensorData<float>();
+        for(int j=0;j<16;++j)if(!std::isfinite(values[j]))throw std::runtime_error("nonfinite CTS warmup output");
+      }
+      std::cout<<"[CTS_WARMUP] runs=8 first_ms="<<first_ms<<" last_ms="<<last_ms
+               <<" outputs_discarded=true"<<std::endl;
+    }
     control_=std::make_unique<StudentControlCore>(robot_);
+    if(cts_)control_->RequirePublicationCommit();
     SetDecimation(4);reset();node_=std::make_shared<rclcpp::Node>("m20_student_terrain_reader");
     subscription_=node_->create_subscription<Terrain>(cfg_["topics"]["terrain"].get<std::string>(),rclcpp::QoS(1).best_effort(),[this](Terrain::SharedPtr t){receive(std::move(t));});
     executor_.add_node(node_);reader_=std::thread([this](){executor_.spin();});
   }
   ~M20PolicyRunner(){executor_.cancel();if(reader_.joinable())reader_.join();}
   void DisplayPolicyInfo() override {
-    std::cout<<"M20 student "<<profile_<<" "<<dim_<<"D ->16D; 20ms; official SDK FSM"<<std::endl;
+    std::cout<<"M20 student-v3.5 sensor heading feedback; ABI "<<profile_<<" "<<dim_<<"D ->16D; 20ms; official SDK FSM"<<std::endl;
+    if(cts_)std::cout<<"[CTS_EXECUTION] mode="<<m20_cts::ExecutionMode(cfg_)
+                    <<" landing_control="<<(cts_execution_?"enabled":"disabled")
+                    <<" policy_period_s="<<m20_cts::servo_period_s*m20_cts::policy_decimation
+                    <<" servo_period_s="<<m20_cts::servo_period_s
+                    <<" servo_interval_min_s="<<m20_cts::servo_interval_min_s
+                    <<" servo_interval_max_s="<<m20_cts::servo_interval_max_s<<std::endl;
     std::cout<<"[STUDENT_CONFIG] coverage_hold_enabled="<<(coverage_hold_enabled_?"true":"false")
              <<" terrain_timing_hold_enabled="<<(terrain_timing_hold_enabled_?"true":"false")
              <<" terrain_source_session_hold_enabled="<<(terrain_source_session_hold_enabled_?"true":"false")
@@ -280,6 +368,8 @@ public:
   bool UsesDepthInput()const{return false;}
   void OnEnter() override {
     reset();have_policy_session_=false;warned_=false;run_cnt_=0;
+    have_nominal_issued_=false;
+    if(cts_execution_)cts_execution_->Reset(m20_cts::SteadySeconds());
     ++trace_episode_;trace_policy_tick_=0;trace_have_anchor_=false;
     std::lock_guard<std::mutex> guard(mutex_);
     if(terrain_){
@@ -289,8 +379,64 @@ public:
         terrain_fault_.clear();
     }
   }
-  void SetStandingHandoff(const MatXf& command){control_->Begin(command);last_tick_=last_target_time_=Clock::now();}
+  void SetStandingHandoff(const MatXf& command){control_->Begin(command);last_tick_=last_target_time_=Clock::now();
+    if(cts_execution_){RobotAction issued;issued.kp=command.col(0);issued.goal_joint_pos=command.col(1);
+      issued.kd=command.col(2);issued.goal_joint_vel=command.col(3);issued.tau_ff=command.col(4);
+      cts_execution_->RecordPublished(issued);}
+    if(cts_nominal_pd_){nominal_issued_.kp=command.col(0);nominal_issued_.goal_joint_pos=command.col(1);
+      nominal_issued_.kd=command.col(2);nominal_issued_.goal_joint_vel=command.col(3);
+      nominal_issued_.tau_ff=command.col(4);have_nominal_issued_=true;}}
+  bool IsCTS()const{return cts_;}
+  bool UsesLandingControl()const{return bool(cts_execution_);}
+  void CheckCTSBody(const RobotBasicState& state){
+    control_->CheckBody(state,cfg_["aos"]["max_proprio_age_s"].get<double>());
+    if(cts_execution_)cts_execution_->CheckFeedback(state.landing_feedback,m20_cts::SteadySeconds());
+  }
+  void LatchCTSTimingHold(const std::string& reason){(void)hold(RobotBasicState{},reason);}
+  void FlushCTSTrace() noexcept {
+    if(pending_cts_trace_){auto emit=std::move(pending_cts_trace_);pending_cts_trace_=nullptr;trace_only(emit);}
+    if(pending_substep_trace_){
+      pending_substep_trace_=false;
+      trace_only([&]{auto row=StudentTrace::Stamp();row["event"]="cts_execution_substep";
+        row["execution_mode"]=m20_cts::ExecutionMode(cfg_);
+        if(cts_execution_){row["landing_counts"]=cts_execution_->Controller().Counts();
+          row["phase"]=cts_execution_->LastOutput().phase;row["kp_scale"]=cts_execution_->LastOutput().kp_scale;}
+        row["publication_scope"]="SDK receipt returned; motor execution is not acknowledged";trace_.Push(std::move(row));});
+    }
+  }
+#ifdef M20_CTS_OFFLINE_REPLAY
+  // Compiled only into the read-only replay executable, never student_control.
+  void ReplayTerrain(Terrain::SharedPtr value){receive(std::move(value));}
+  const std::vector<float>& ReplayObservation()const{return trace_observation_;}
+  const std::array<float,3>& ReplayRawCommand()const{return trace_raw_command_;}
+  const std::array<float,16>& ReplayNominalAction()const{return control_->CandidatePrevious();}
+  const std::array<uint64_t,6>& ReplayLandingCounts()const{static const std::array<uint64_t,6> none{};
+    return cts_execution_?cts_execution_->Controller().Counts():none;}
+  void ReplayInferenceDelay(float seconds){if(!std::isfinite(seconds)||seconds<0||seconds>.03f)throw std::runtime_error("replay delay out of bounds");replay_after_inference_delay_s_=seconds;}
+#endif
+  RobotAction ExecuteCTSSubstep(const RobotAction& nominal,const RobotBasicState& state){
+    if(!cts_)throw std::runtime_error("CTS substep called for legacy policy");
+    control_->CheckBody(state,cfg_["aos"]["max_proprio_age_s"].get<double>());
+    if(cts_nominal_pd_){
+      const auto target=control_->Latched()?hold(state,control_->Reason()):nominal;
+      control_->ValidateTarget(target);return target;
+    }
+    if(!cts_execution_)throw std::runtime_error("CTS landing execution missing");
+    cts_execution_->CheckFeedback(state.landing_feedback,m20_cts::SteadySeconds());
+    if(control_->Latched())return cts_execution_->Hold(nominal);
+    return cts_execution_->Apply(nominal,state.landing_feedback,m20_cts::SteadySeconds());
+  }
+  void RecordCTSCommandPublished(const MatXf& command){if(cts_){
+    control_->RecordPublished(command);
+    RobotAction issued;issued.kp=command.col(0);issued.goal_joint_pos=command.col(1);
+    issued.kd=command.col(2);issued.goal_joint_vel=command.col(3);issued.tau_ff=command.col(4);
+    if(cts_nominal_pd_){nominal_issued_=issued;have_nominal_issued_=true;}
+    if(cts_execution_)cts_execution_->RecordPublished(issued);
+    pending_substep_trace_=true;
+  }}
+  bool CTSNominalIsHeld()const{return control_->Latched();}
   RobotAction getRobotAction(const RobotBasicState& ro,const UserCommand& uc) override {
+    FlushCTSTrace();
     // Use the same command sample for the tensor and its audit row.
     const std::array<float,3> command={uc.forward_vel_scale.load(),uc.side_vel_scale.load(),uc.turnning_vel_scale.load()};
     const uint64_t policy_tick=trace_policy_tick_++,legacy_tick=trace_tick_++;
@@ -329,7 +475,8 @@ public:
       row["terrain_source_session_hold_enabled"]=terrain_source_session_hold_enabled_;
     });
     auto finish_trace=[&]() noexcept {
-      trace_only([&]{row["policy_end_stamp"]=StudentTrace::Stamp();});
+      trace_only([&]{row["policy_evaluate_end_stamp"]=StudentTrace::Stamp();});
+      auto emit=[this,row=std::move(row)]() mutable noexcept {
       trace_emit_attempts();
       trace_only([&]{
         row["terrain_age_s"]=trace_terrain_age_;row["valid_cells"]=trace_valid_;
@@ -343,8 +490,13 @@ public:
         }
         if(trace_have_terrain_){row["terrain_session"]=trace_source_session_;row["terrain_sequence"]=trace_source_sequence_;row["terrain_query_stamp"]=trace_query_stamp_;}
         if(trace_terrain_frame_){row["terrain_raw"]=terrain_payload(*trace_terrain_frame_);row["terrain_received_stamp"]=trace_terrain_received_stamp_;}
+        row["policy_trace_ready_stamp"]=StudentTrace::Stamp();
         trace_.Push(std::move(row));
       });
+      };
+      // Full observation/terrain JSON belongs after the SDK publication
+      // decision. The worker measures the entire getRobotAction call itself.
+      if(cts_)trace_only([&]{pending_cts_trace_=std::move(emit);});else emit();
     };
     try{
       auto target=evaluate(ro,command);
@@ -372,6 +524,7 @@ public:
     if(terrain){trace_have_terrain_=true;trace_source_session_=terrain->session_id;trace_source_sequence_=terrain->sequence;trace_query_stamp_=terrain->header.stamp.sec+terrain->header.stamp.nanosec*1e-9;trace_terrain_frame_=terrain;}
     if(!terrain_fault.empty())return hold(ro,terrain_fault);
     auto accept_source_switch=[&](){
+      if(cts_execution_)cts_execution_->SelectMapSource(source_session,ro.landing_feedback,m20_cts::SteadySeconds());
       const uint64_t previous_session=policy_terrain_session_,previous_generation=policy_source_generation_;
       policy_source_generation_=source_generation;policy_terrain_session_=source_session;
       std::cout<<"[STUDENT_TERRAIN_SESSION_SWITCH] from_session="<<previous_session
@@ -426,22 +579,37 @@ public:
         c=static_cast<float>(base*std::exp(-delta/tau_)/(1+growth*weight));++valid;
         trace_cell_age_[i]=static_cast<float>(a+delta);
       }
+      if(!policy_map_mask_[i]){if(m==1)--valid;h=m=c=0;trace_cell_age_[i]=-1.f;}
       obs[57+i]=h;obs[244+i]=m;obs[431+i]=c;
       if(m==1){if(i%17>8)++front_valid;else if(i%17<8)++rear_valid;}
     }
     trace_valid_=valid;
     trace_front_valid_=front_valid;trace_rear_valid_=rear_valid;
     if(coverage_hold_enabled_&&valid/187.f<min_fraction_)return hold(ro,"terrain coverage below admission threshold");
+    std::array<float,3> raw_command={proprio[6],proprio[7],proprio[8]};
+    trace_raw_command_=raw_command;
+    const float yaw=std::atan2(ro.base_rot_mat(1,0),ro.base_rot_mat(0,0));
+    auto apply_feedback=[&](){
+      const auto effective=heading_->Apply(raw_command,yaw,proprio[2]/.25f,obs,feedback_step_);
+      for(int i=0;i<3;++i){proprio[6+i]=effective[i];obs[6+i]=effective[i];}
+    };
+    apply_feedback();
     for(int frame=0;frame<history_steps_-1;++frame)std::copy(history_[frame].begin(),history_[frame].end(),obs.begin()+618+57*frame);
-    std::array<int64_t,2> shape{1,dim_};auto input=Ort::Value::CreateTensor<float>(memory_,obs.data(),obs.size(),shape.data(),shape.size());
-    const char* names[]={"obs"};const char* outputs[]={"actions"};
+    std::array<int64_t,2> shape{1,dim_},raw_shape{1,3};
+    std::vector<Ort::Value> inputs;
+    inputs.push_back(Ort::Value::CreateTensor<float>(memory_,obs.data(),obs.size(),shape.data(),shape.size()));
+    if(cts_)inputs.push_back(Ort::Value::CreateTensor<float>(memory_,raw_command.data(),raw_command.size(),raw_shape.data(),raw_shape.size()));
+    const char* names[]={"obs","raw_command"};const char* outputs[]={"actions"};
     std::vector<Ort::Value> result;
     size_t trace_attempt=trace_begin_attempt(obs);
     const auto inference_start=Clock::now();
-    try{result=session_.Run(Ort::RunOptions{nullptr},names,&input,1,outputs,1);}
+    try{result=session_.Run(Ort::RunOptions{nullptr},names,inputs.data(),inputs.size(),outputs,1);}
     catch(const Ort::Exception& error){trace_end_attempt(trace_attempt,nullptr,"failed",error.what());return hold(ro,"ONNX inference failed");}
     trace_end_attempt(trace_attempt,&result,"candidate");
     trace_inference_ms_=std::chrono::duration<double,std::milli>(Clock::now()-inference_start).count();
+#ifdef M20_CTS_OFFLINE_REPLAY
+    std::this_thread::sleep_for(std::chrono::duration<float>(replay_after_inference_delay_s_));
+#endif
     double processing_age=std::chrono::duration<double>(Clock::now()-tick).count();
     if(ro.body_receive_age_s+processing_age>cfg_["aos"]["max_proprio_age_s"].get<double>()){
       trace_disposition(trace_attempt,"discarded","SDK body state expired during inference");
@@ -459,8 +627,9 @@ public:
       trace_cell_age_.fill(-1.f);
       trace_mode("unknown_expired_during_inference");
       if(coverage_hold_enabled_)return hold(ro,"terrain coverage below admission threshold");
+      apply_feedback(); // Same step: restore pre-feedback state before the unknown-map retry.
       trace_attempt=trace_begin_attempt(obs);
-      try{result=session_.Run(Ort::RunOptions{nullptr},names,&input,1,outputs,1);}
+      try{result=session_.Run(Ort::RunOptions{nullptr},names,inputs.data(),inputs.size(),outputs,1);}
       catch(const Ort::Exception& error){trace_end_attempt(trace_attempt,nullptr,"failed",error.what());return hold(ro,"ONNX inference failed");}
       trace_end_attempt(trace_attempt,&result,"candidate");
       trace_inference_ms_=std::chrono::duration<double,std::milli>(Clock::now()-inference_start).count();
@@ -482,7 +651,19 @@ public:
     }
     trace_disposition(trace_attempt,"mapped_target","publication follows in the official SDK writer");
     last_target_time_=target_time;
+    if(cts_execution_){
+      cts_execution_->SetRawCommand(raw_command);
+      // The hardware binding must supply the original map query pose; no
+      // transform is inferred from the robot's current yaw or zero position.
+      if(terrain){
+        auto ages=trace_cell_age_;
+        const float processing=float(std::chrono::duration<double>(Clock::now()-terrain_age_sample).count());
+        for(auto& value:ages)if(value>=0)value+=processing;
+        cts_execution_->ObserveMap(obs,ages,ro.landing_feedback,terrain->session_id,terrain->sequence,
+            terrain->header.stamp.sec+terrain->header.stamp.nanosec*1e-9,m20_cts::SteadySeconds());
+      }
+    }
     if(history_steps_>1){history_.pop_front();history_.push_back(proprio);}
-    last_tick_=tick;have_tick_=true;warned_=false;++run_cnt_;return target;
+    ++feedback_step_;last_tick_=tick;have_tick_=true;warned_=false;++run_cnt_;return target;
   }
 };

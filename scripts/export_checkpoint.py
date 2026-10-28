@@ -57,9 +57,18 @@ def main():
     ap.add_argument("--checkpoint", type=Path, required=True)
     ap.add_argument("--profile", choices=("v0", "v1"), required=True)
     ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--training", type=Path, help="CTS: training checkout for canonical loader")
     args = ap.parse_args()
     torch.set_num_threads(1)
     saved = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+    if "cts" in saved:
+        if args.profile != "v1" or args.training is None:
+            raise ValueError("CTS requires --profile v1 --training /path/to/rl_training")
+        from export_cts_checkpoint import export
+        print(json.dumps(export(args.checkpoint,args.training,args.output),indent=2))
+        return
+    from m20_heightmap.cts import require_hardware_runtime
+    require_hardware_runtime(saved.get("student_"+args.profile, {}).get("provenance", {}))
     actor, actual, provenance, spec = student_actor(saved, args.profile)
     args.output.mkdir(parents=True, exist_ok=True)
     if any(args.output.iterdir()):
